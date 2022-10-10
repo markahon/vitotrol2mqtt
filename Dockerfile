@@ -1,6 +1,6 @@
-FROM golang:1.18 AS builder
+FROM golang:1.19 AS builder
 
-RUN CGO_ENABLED=0 GOOS=linux go get -u -a -tags netgo -ldflags '-w -extldflags "-static"' github.com/markahon/vitotrol2mqtt
+RUN CGO_ENABLED=0 GOOS=linux go install github.com/markahon/vitotrol2mqtt@master
 
 FROM alpine:3.13.2
 
