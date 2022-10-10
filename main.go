@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -24,7 +25,7 @@ func updateDeviceAttr(deviceName string, attrName string, value string) {
 	attrId, ok := vitotrol.AttributesNames2IDs[attrName]
 
 	if ok && vitotrol.AttributesRef[attrId].Access == vitotrol.ReadWrite {
-		fmt.Println(fmt.Sprintf("Setting %s to %s", attrName, value))
+		fmt.Printf("Setting %s to %s\n", attrName, value)
 		ok = false
 		for _, vdev := range pVitotrol.Devices {
 			if vdev.DeviceName == deviceName {
@@ -49,7 +50,7 @@ func updateDeviceAttr(deviceName string, attrName string, value string) {
 	}
 
 	if !ok {
-		fmt.Println(fmt.Sprintf("Device %s: cannot set attribute %s to %s", deviceName, attrName, value))
+		fmt.Printf("Device %s: cannot set attribute %s to %s\n", deviceName, attrName, value)
 	}
 }
 
@@ -74,31 +75,29 @@ var connectLostHandler mqtt.ConnectionLostHandler = func(client mqtt.Client, err
 }
 
 func VitotrolInit(vconf *ConfigVitotrol) *vitotrol.Session {
-	for {
-		pVitotrol = &vitotrol.Session{}
-
-		fmt.Println("Vitotrol login...")
-		err := pVitotrol.Login(vconf.Login, vconf.Password)
-		if err != nil {
-			err = fmt.Errorf("Login failed: %s", err)
-			os.Exit(1)
-
-		}
-
-		fmt.Println("Vitotrol GetDevices...")
-		err = pVitotrol.GetDevices()
-		if err != nil {
-			err = fmt.Errorf("GetDevices failed: %s", err)
-			os.Exit(1)
-		}
-		if len(pVitotrol.Devices) == 0 {
-			err = fmt.Errorf("No device found")
-			os.Exit(1)
-
-		}
-		fmt.Printf("%d device(s) found\n", len(pVitotrol.Devices))
-		return pVitotrol
+	pVitotrol = &vitotrol.Session{
+		Debug: vconf.Debug,
 	}
+
+	fmt.Println("Vitotrol login...")
+	err := pVitotrol.Login(vconf.Login, vconf.Password)
+	if err != nil {
+		_ = fmt.Errorf("login failed: %s", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Vitotrol GetDevices...")
+	err = pVitotrol.GetDevices()
+	if err != nil {
+		_ = fmt.Errorf("GetDevices failed: %s", err)
+		os.Exit(1)
+	}
+	if len(pVitotrol.Devices) == 0 {
+		_ = fmt.Errorf("no device found")
+		os.Exit(1)
+	}
+	fmt.Printf("%d device(s) found\n", len(pVitotrol.Devices))
+	return pVitotrol
 }
 
 func getAttrValue(vdev *vitotrol.Device, attrID vitotrol.AttrID) (value interface{}) {
@@ -132,8 +131,7 @@ func refreshDevice(device *vitotrol.Device, attrs []vitotrol.AttrID) bool {
 	fields := map[string]interface{}{}
 
 	for _, attrID := range attrs {
-		fields[vitotrol.AttributesRef[attrID].Name] =
-			getAttrValue(device, attrID)
+		fields[vitotrol.AttributesRef[attrID].Name] = getAttrValue(device, attrID)
 	}
 
 	// Write the batch
@@ -158,12 +156,12 @@ func refreshDevices() {
 					refreshDevice(&device, deviceConfig.attrs)
 				} else {
 					// Device is not connect - retry.
-					fmt.Fprintf(os.Stderr, "Device is not connected `%s'\n", device.DeviceName);
+					fmt.Fprintf(os.Stderr, "Device is not connected `%s'\n", device.DeviceName)
 					os.Exit(1)
 				}
 			}
 		}
-		delta := time.Duration(pConf.Vitotrol.Frequency) * time.Second - time.Now().Sub(start)
+		delta := time.Duration(pConf.Vitotrol.Frequency)*time.Second - time.Since(start)
 		if delta > 0 {
 			time.Sleep(delta)
 		}
@@ -193,10 +191,19 @@ func resolveFields() {
 						os.Exit(1)
 					}
 
+					tmpName := m[1]
+					access := vitotrol.ReadOnly
+
+					// TODO Better would be to do configDevice.GetTypeInfo and cache the result
+					// and check access against the real type mapping.
+					if strings.HasPrefix(tmpName, "RW") {
+						access = vitotrol.ReadWrite
+					}
+
 					attrRef := vitotrol.AttrRef{
 						Type:   vitotrol.TypeDouble,
-						Access: vitotrol.ReadOnly,
-						Name:   m[1],
+						Access: access,
+						Name:   tmpName,
 					}
 					tmpID, _ := strconv.ParseUint(m[2], 16, 16)
 					attrID = vitotrol.AttrID(tmpID)
