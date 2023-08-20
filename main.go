@@ -51,8 +51,7 @@ func updateDeviceAttr(deviceName string, attrName string, value string) {
 	}
 
 	if !ok {
-		fmt.Printf("Device %s: ca+
-		 %s\n", deviceName, attrName, value)
+		fmt.Println(fmt.Sprintf("Device %s: cannot set attribute %s to %s", deviceName, attrName, value))
 	}
 }
 
