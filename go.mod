@@ -1,6 +1,6 @@
-module github.com/markahon/vitotrol2mqtt
+module github.com/stefanbode/vitotrol2mqtt
 
-go 1.18
+go 1.18 
 
 // replace github.com/maxatome/go-vitotrol => ../go-vitotrol
 

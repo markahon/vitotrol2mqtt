@@ -1,14 +1,14 @@
 ---
 mqtt:
-  login: MQTT_USER
-  password: MQTT_PASSWORD
-  broker: BROKER_URL
+  login: homematic
+  password: sunSeaker1all
+  broker: 192.168.178.96
   port: 1883
   client_id: vitotrol2mqtt
   topic: vitotrol2mqtt
 vitotrol:
-  login: VITOTROL_USER
-  password: VITOTROL_PASSWORD
+  login: stefan_bode@web.de
+  password: v1769fiZZn
   retry_timeout: 30
   frequency: 60
 devices:
@@ -34,4 +34,7 @@ devices:
       - PartyMode
       - EnergySavingMode
       - OperatingModeCurrent
-      - Way3ValveStatus
+      - CirculationPumpState
+      - DateTime
+      - OperatingModeRequested
+      - RWOperatingModeRequestedNew_0x005c
