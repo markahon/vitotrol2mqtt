@@ -1,4 +1,4 @@
-module github.com/markahon/vitotrol2mqtt
+module github.com/stefanbode/vitotrol2mqtt
 
 go 1.18
 

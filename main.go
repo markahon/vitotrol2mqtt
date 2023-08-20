@@ -22,6 +22,7 @@ var customAttrRegEx = regexp.MustCompile(
 	`^([a-zA-Z0-9_]+)[-_]0x([a-fA-F0-9]{1,4})\z`)
 
 func updateDeviceAttr(deviceName string, attrName string, value string) {
+	VitotrolInit()
 	attrId, ok := vitotrol.AttributesNames2IDs[attrName]
 
 	if ok && vitotrol.AttributesRef[attrId].Access == vitotrol.ReadWrite {
@@ -50,7 +51,8 @@ func updateDeviceAttr(deviceName string, attrName string, value string) {
 	}
 
 	if !ok {
-		fmt.Printf("Device %s: cannot set attribute %s to %s\n", deviceName, attrName, value)
+		fmt.Printf("Device %s: ca+
+		 %s\n", deviceName, attrName, value)
 	}
 }
 
@@ -58,7 +60,7 @@ var messagePubHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Me
 	if pConf != nil {
 		var topicRegEx = regexp.MustCompile(pConf.MQTT.Topic + `\/(.*?)\/([^/]*?)\/set`)
 		m := topicRegEx.FindStringSubmatch(msg.Topic())
-
+		fmt.Println("MQTT Update request %s %s %s", m[1], m[2], string(msg.Payload()))
 		if m != nil {
 			updateDeviceAttr(m[1], m[2], string(msg.Payload()))
 		}
@@ -66,7 +68,7 @@ var messagePubHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Me
 }
 
 var connectHandler mqtt.OnConnectHandler = func(client mqtt.Client) {
-	fmt.Println("MQTT Connected")
+	fmt.Println("MQTT Connected. Stefan Bode")
 }
 
 var connectLostHandler mqtt.ConnectionLostHandler = func(client mqtt.Client, err error) {
@@ -74,30 +76,27 @@ var connectLostHandler mqtt.ConnectionLostHandler = func(client mqtt.Client, err
 	os.Exit(1)
 }
 
-func VitotrolInit(vconf *ConfigVitotrol) *vitotrol.Session {
-	pVitotrol = &vitotrol.Session{
-		Debug: vconf.Debug,
-	}
-
+func VitotrolInit() {
+	pVitotrol = &vitotrol.Session{}
 	fmt.Println("Vitotrol login...")
-	err := pVitotrol.Login(vconf.Login, vconf.Password)
+	err := pVitotrol.Login(pConf.Vitotrol.Login, pConf.Vitotrol.Password)
 	if err != nil {
-		_ = fmt.Errorf("login failed: %s", err)
+		err = fmt.Errorf("Login failed: %s", err)
 		os.Exit(1)
-	}
 
+	}
 	fmt.Println("Vitotrol GetDevices...")
 	err = pVitotrol.GetDevices()
 	if err != nil {
-		_ = fmt.Errorf("GetDevices failed: %s", err)
+		err = fmt.Errorf("GetDevices failed: %s", err)
 		os.Exit(1)
 	}
 	if len(pVitotrol.Devices) == 0 {
-		_ = fmt.Errorf("no device found")
+		err = fmt.Errorf("No device found")
 		os.Exit(1)
+
 	}
 	fmt.Printf("%d device(s) found\n", len(pVitotrol.Devices))
-	return pVitotrol
 }
 
 func getAttrValue(vdev *vitotrol.Device, attrID vitotrol.AttrID) (value interface{}) {
@@ -146,25 +145,25 @@ func refreshDevice(device *vitotrol.Device, attrs []vitotrol.AttrID) bool {
 }
 
 func refreshDevices() {
-	for {
-		start := time.Now()
-		for _, device := range pVitotrol.Devices {
-			// Check if this device has a configuration
-			deviceConfig := pConf.GetConfigDevice(device.DeviceName, device.LocationName)
-			if deviceConfig != nil {
-				if device.IsConnected {
-					refreshDevice(&device, deviceConfig.attrs)
-				} else {
-					// Device is not connect - retry.
-					fmt.Fprintf(os.Stderr, "Device is not connected `%s'\n", device.DeviceName)
-					os.Exit(1)
-				}
+	fmt.Println("Refreshing fields...")
+
+	start := time.Now()
+	for _, device := range pVitotrol.Devices {
+		// Check if this device has a configuration
+		deviceConfig := pConf.GetConfigDevice(device.DeviceName, device.LocationName)
+		if deviceConfig != nil {
+			if device.IsConnected {
+				refreshDevice(&device, deviceConfig.attrs)
+			} else {
+				// Device is not connect - retry.
+				fmt.Fprintf(os.Stderr, "Device is not connected `%s'\n", device.DeviceName)
+				os.Exit(1)
 			}
 		}
-		delta := time.Duration(pConf.Vitotrol.Frequency)*time.Second - time.Since(start)
-		if delta > 0 {
-			time.Sleep(delta)
-		}
+	}
+	delta := time.Duration(pConf.Vitotrol.Frequency)*time.Second - time.Since(start)
+	if delta > 0 {
+		time.Sleep(delta)
 	}
 }
 
@@ -198,6 +197,7 @@ func resolveFields() {
 					// and check access against the real type mapping.
 					if strings.HasPrefix(tmpName, "RW") {
 						access = vitotrol.ReadWrite
+						fmt.Println("%s is writeanble", tmpName)
 					}
 
 					attrRef := vitotrol.AttrRef{
@@ -243,15 +243,16 @@ func initializeMQTTClient() {
 		panic(token.Error())
 	}
 	//subscribe to the topic to catch the control commands
+	
 	topic := pConf.MQTT.Topic + "/#"
+	fmt.Println("MQTT Subscribe %s ", topic)
 	token := mqttClient.Subscribe(topic, 1, messagePubHandler)
 	token.Wait()
 }
 
 func mainLoop() {
-	pVitotrol = VitotrolInit(&pConf.Vitotrol)
-
 	for {
+		VitotrolInit()
 		refreshDevices()
 	}
 }
