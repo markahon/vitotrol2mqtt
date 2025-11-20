@@ -1,0 +1,5 @@
+# Sensitive configuration file
+vitotrol2mqtt.yml
+
+# Local build artifact
+vitotrol2mqtt

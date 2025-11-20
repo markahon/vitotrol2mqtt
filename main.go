@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/benvanmierloo/go-vitotrol"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/maxatome/go-vitotrol"
 )
 
 var pConf *Config
