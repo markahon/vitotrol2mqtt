@@ -73,3 +73,14 @@ docker-compose up
 
 That's all.
 
+## Run on server, eg. Portainer
+
+1. Portainer -> Images -> Build a new Image
+2. Input name: vitotrol2mqtt:latest
+3. Use URL option
+4. URL: https://github.com/....git#master
+5. Build the image
+6. Go to Containers
+7. Update the container image target to the above name, if needed
+8. Deploy the container
+9. Make sure the yaml file is in volume mount and pointed to containers /vitotrol2mqtt.yml path
