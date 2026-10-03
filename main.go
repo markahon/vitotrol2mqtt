@@ -157,6 +157,10 @@ func refreshDevices() {
 				} else {
 					// Device is not connect - retry.
 					fmt.Fprintf(os.Stderr, "Device is not connected `%s'\n", device.DeviceName)
+					// ponytail: crash-only kept; wait retry_timeout before exiting so a gateway
+					// outage doesn't re-login every minute. Keep it >= minutes: a run >10s resets
+					// Docker's restart backoff. Real fix = local Optolink.
+					time.Sleep(time.Duration(pConf.Vitotrol.RetryTimeout) * time.Second)
 					os.Exit(1)
 				}
 			}

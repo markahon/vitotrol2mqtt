@@ -9,7 +9,7 @@ mqtt:
 vitotrol:
   login: VITOTROL_USER
   password: VITOTROL_PASSWORD
-  retry_timeout: 30
+  retry_timeout: 300
   frequency: 60
 devices:
   - name: '*'
