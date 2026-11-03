@@ -49,6 +49,20 @@ You can use [`vitotrol`](https://github.com/maxatome/go-vitotrol) +
 `rget all`, `bget` or `remote_attrs` actions to discover attributes and their read/write access
 (german language skill needed :) ).
 
+### Schedules (timesheets)
+
+Switching-time programs are read and written by datapoint ID (decimal),
+e.g. a WO1C circulation pump schedule `konf_schaltzeiten_zp_rw` 0x1d77 = 7543:
+
+- publish anything to `<topic>/<device>/Schedule_7543/get` → the schedule is
+  published **retained** on `<topic>/<device>/Schedule_7543` as
+  `{"mon":[{"from":630,"to":900,"value":2}],...}` (times HHMM, `to` 0 = 24:00,
+  `value` = the slot's Wert, e.g. pump cycle mode)
+- publish JSON to `<topic>/<device>/Schedule_7543/set` (never retained), e.g.
+  `{"mon-sun":[{"from":630,"to":900,"value":2}]}`, `{"mon-sun":[]}` = no slots.
+  The current schedule is read first (its type is echoed on write), the write
+  waits for the controller (~1 min) and the read-back is published.
+
 ### Computed attributes
 
 Note that you can provide the special attribute

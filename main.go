@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/benvanmierloo/go-vitotrol"
@@ -54,8 +55,70 @@ func updateDeviceAttr(deviceName string, attrName string, value string) {
 	}
 }
 
+var scheduleMutex sync.Mutex
+
+// publishSchedule reads timesheet id and publishes it retained as JSON
+// ({"mon":[{"from":630,"to":900,"value":2}],...}) on
+// <topic>/<device>/Schedule_<id>.
+func publishSchedule(vdev *vitotrol.Device, id vitotrol.TimesheetID) bool {
+	if err := vdev.GetTimesheetData(pVitotrol, id); err != nil {
+		fmt.Fprintf(os.Stderr, "GetTimesheetData %d error: %s\n", id, err)
+		return false
+	}
+	b, _ := json.Marshal(vdev.Timesheets[id])
+	token := mqttClient.Publish(fmt.Sprintf("%s/%s/Schedule_%d", pConf.MQTT.Topic, vdev.DeviceName, id), 0, true, b)
+	token.Wait()
+	return true
+}
+
+// updateDeviceSchedule handles <topic>/<device>/Schedule_<id>/get (publish
+// only) and /set (JSON like {"mon-sun":[{"from":630,"to":900,"value":2}]},
+// {"mon-sun":[]} = no slots), then publishes the read-back. Errors are
+// logged, not fatal: a bad payload must not crash-loop the bridge.
+func updateDeviceSchedule(deviceName string, id vitotrol.TimesheetID, cmd string, payload []byte) {
+	scheduleMutex.Lock()
+	defer scheduleMutex.Unlock()
+
+	var vdev *vitotrol.Device
+	for i := range pVitotrol.Devices {
+		if pVitotrol.Devices[i].DeviceName == deviceName {
+			vdev = &pVitotrol.Devices[i]
+		}
+	}
+	if vdev == nil {
+		fmt.Printf("Device %s: unknown, Schedule_%d/%s ignored\n", deviceName, id, cmd)
+		return
+	}
+	// read first: the write must echo the timesheet type learnt here
+	if !publishSchedule(vdev, id) || cmd != "set" {
+		return
+	}
+	var data map[string]vitotrol.TimeslotSlice
+	if err := json.Unmarshal(payload, &data); err != nil {
+		fmt.Fprintf(os.Stderr, "Schedule_%d: bad JSON: %s\n", id, err)
+		return
+	}
+	fmt.Printf("Setting Schedule_%d to %s\n", id, payload)
+	ch, err := vdev.WriteTimesheetDataWait(pVitotrol, id, data)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WriteTimesheetData %d error: %s\n", id, err)
+	} else if err = <-ch; err != nil {
+		fmt.Fprintf(os.Stderr, "WriteTimesheetData %d failed: %s\n", id, err)
+	}
+	publishSchedule(vdev, id)
+}
+
 var messagePubHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
 	if pConf != nil {
+		// Own goroutine: a timesheet write waits ~1 min for the controller,
+		// longer than the MQTT keepalive this callback would block.
+		var scheduleRegEx = regexp.MustCompile(pConf.MQTT.Topic + `\/(.*?)\/Schedule_(\d+)\/(set|get)$`)
+		if m := scheduleRegEx.FindStringSubmatch(msg.Topic()); m != nil {
+			id, _ := strconv.ParseUint(m[2], 10, 16)
+			go updateDeviceSchedule(m[1], vitotrol.TimesheetID(id), m[3], msg.Payload())
+			return
+		}
+
 		var topicRegEx = regexp.MustCompile(pConf.MQTT.Topic + `\/(.*?)\/([^/]*?)\/set`)
 		m := topicRegEx.FindStringSubmatch(msg.Topic())
 
@@ -276,6 +339,11 @@ func main() {
 		os.Exit(1)
 	}
 	pConf = conf
+
+	// Timesheet writes take ~1 min to reach the controller: poll every 5 s
+	// (default 1 s), give up after 3 min.
+	vitotrol.WriteTimesheetDataWaitMinDuration = 5 * time.Second
+	vitotrol.WriteTimesheetDataWaitTimeout = 3 * time.Minute
 
 	// Resolve fields
 	resolveFields()

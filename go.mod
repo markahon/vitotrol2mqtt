@@ -2,10 +2,10 @@ module github.com/markahon/vitotrol2mqtt
 
 go 1.18
 
-replace github.com/benvanmierloo/go-vitotrol => github.com/markahon/go-vitotrol v0.0.0-20251106211643-3fe402519295
+replace github.com/benvanmierloo/go-vitotrol => github.com/markahon/go-vitotrol v0.0.0-20261103233059-fa4534a960ac
 
 require (
-	github.com/benvanmierloo/go-vitotrol v0.0.0-20251106211643-3fe402519295
+	github.com/benvanmierloo/go-vitotrol v0.0.0-20261103233059-fa4534a960ac
 	github.com/eclipse/paho.mqtt.golang v1.3.1
 	gopkg.in/yaml.v2 v2.4.0
 )
