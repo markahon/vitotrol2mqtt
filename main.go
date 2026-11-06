@@ -22,7 +22,12 @@ var mqttClient mqtt.Client
 var customAttrRegEx = regexp.MustCompile(
 	`^([a-zA-Z0-9_]+)[-_]0x([a-fA-F0-9]{1,4})\z`)
 
+// updateDeviceAttr writes one attribute. Errors are logged, not fatal: a failed
+// write must not stop polling.
 func updateDeviceAttr(deviceName string, attrName string, value string) {
+	writeMutex.Lock()
+	defer writeMutex.Unlock()
+
 	attrId, ok := vitotrol.AttributesNames2IDs[attrName]
 
 	if ok && vitotrol.AttributesRef[attrId].Access == vitotrol.ReadWrite {
@@ -33,11 +38,11 @@ func updateDeviceAttr(deviceName string, attrName string, value string) {
 				ch, err := vdev.WriteDataWait(pVitotrol, attrId, value)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "WriteData error: %s\n", err)
-					os.Exit(1)
+					return
 				}
 				if err = <-ch; err != nil {
 					fmt.Fprintf(os.Stderr, "WriteData failed: %s\n", err)
-					os.Exit(1)
+					return
 				}
 				// update MQTT with the new value
 				token := mqttClient.Publish(pConf.MQTT.Topic+"/"+vdev.DeviceName+"/"+attrName, 0, false, value)
@@ -55,7 +60,8 @@ func updateDeviceAttr(deviceName string, attrName string, value string) {
 	}
 }
 
-var scheduleMutex sync.Mutex
+// writeMutex serialises writes to the controller.
+var writeMutex sync.Mutex
 
 // publishSchedule reads timesheet id and publishes it retained as JSON
 // ({"mon":[{"from":630,"to":900,"value":2}],...}) on
@@ -76,8 +82,8 @@ func publishSchedule(vdev *vitotrol.Device, id vitotrol.TimesheetID) bool {
 // {"mon-sun":[]} = no slots), then publishes the read-back. Errors are
 // logged, not fatal: a bad payload must not crash-loop the bridge.
 func updateDeviceSchedule(deviceName string, id vitotrol.TimesheetID, cmd string, payload []byte) {
-	scheduleMutex.Lock()
-	defer scheduleMutex.Unlock()
+	writeMutex.Lock()
+	defer writeMutex.Unlock()
 
 	var vdev *vitotrol.Device
 	for i := range pVitotrol.Devices {
@@ -110,7 +116,7 @@ func updateDeviceSchedule(deviceName string, id vitotrol.TimesheetID, cmd string
 
 var messagePubHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
 	if pConf != nil {
-		// Own goroutine: a timesheet write waits ~1 min for the controller,
+		// Own goroutines: a write waits up to minutes for the controller,
 		// longer than the MQTT keepalive this callback would block.
 		var scheduleRegEx = regexp.MustCompile(pConf.MQTT.Topic + `\/(.*?)\/Schedule_(\d+)\/(set|get)$`)
 		if m := scheduleRegEx.FindStringSubmatch(msg.Topic()); m != nil {
@@ -123,7 +129,7 @@ var messagePubHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Me
 		m := topicRegEx.FindStringSubmatch(msg.Topic())
 
 		if m != nil {
-			updateDeviceAttr(m[1], m[2], string(msg.Payload()))
+			go updateDeviceAttr(m[1], m[2], string(msg.Payload()))
 		}
 	}
 }
@@ -154,20 +160,30 @@ func VitotrolInit(vconf *ConfigVitotrol) *vitotrol.Session {
 	fmt.Println("Vitotrol GetDevices...")
 	err = pVitotrol.GetDevices()
 	if err != nil {
-		_ = fmt.Errorf("GetDevices failed: %s", err)
+		fmt.Fprintf(os.Stderr, "GetDevices failed: %s\n", err)
 		os.Exit(1)
 	}
 	if len(pVitotrol.Devices) == 0 {
-		_ = fmt.Errorf("no device found")
+		fmt.Fprintln(os.Stderr, "no device found")
 		os.Exit(1)
 	}
 	fmt.Printf("%d device(s) found\n", len(pVitotrol.Devices))
 	return pVitotrol
 }
 
+// getAttrValue returns the value of attrID, nil if the server did not send it.
+// A value its type can't parse is returned as is: custom attributes are all
+// Double, even dates.
 func getAttrValue(vdev *vitotrol.Device, attrID vitotrol.AttrID) (value interface{}) {
-	value, _ = vitotrol.AttributesRef[attrID].
-		Type.Vitodata2NativeValue(vdev.Attributes[attrID].Value)
+	pValue := vdev.Attributes[attrID]
+	if pValue == nil {
+		return nil
+	}
+	value, err := vitotrol.AttributesRef[attrID].
+		Type.Vitodata2NativeValue(pValue.Value)
+	if err != nil {
+		return pValue.Value
+	}
 
 	// uint64 handled from influx 1.4
 	if vuint64, ok := value.(uint64); ok {
@@ -196,7 +212,9 @@ func refreshDevice(device *vitotrol.Device, attrs []vitotrol.AttrID) bool {
 	fields := map[string]interface{}{}
 
 	for _, attrID := range attrs {
-		fields[vitotrol.AttributesRef[attrID].Name] = getAttrValue(device, attrID)
+		if value := getAttrValue(device, attrID); value != nil {
+			fields[vitotrol.AttributesRef[attrID].Name] = value
+		}
 	}
 
 	// Write the batch
@@ -313,8 +331,9 @@ func initializeMQTTClient() {
 	}
 	//subscribe to the topic to catch the control commands
 	topic := pConf.MQTT.Topic + "/#"
-	token := mqttClient.Subscribe(topic, 1, messagePubHandler)
-	token.Wait()
+	if token := mqttClient.Subscribe(topic, 1, messagePubHandler); token.Wait() && token.Error() != nil {
+		panic(token.Error())
+	}
 }
 
 func mainLoop() {

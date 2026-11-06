@@ -2,7 +2,7 @@ module github.com/markahon/vitotrol2mqtt
 
 go 1.18
 
-replace github.com/benvanmierloo/go-vitotrol => github.com/markahon/go-vitotrol v0.0.0-20261103233059-fa4534a960ac
+replace github.com/benvanmierloo/go-vitotrol => github.com/markahon/go-vitotrol v0.0.0-20261106071930-21311c13b807
 
 require (
 	github.com/benvanmierloo/go-vitotrol v0.0.0-20261103233059-fa4534a960ac
