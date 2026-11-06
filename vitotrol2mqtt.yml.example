@@ -25,7 +25,6 @@ devices:
       - PartyModeTemp
       - HeatReducedTemp
       - SmokeTemp
-      - ComputedSetpointTemp
       - BurnerHoursRun
       - BurnerStarts
       - BurnerState

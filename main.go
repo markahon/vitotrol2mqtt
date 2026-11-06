@@ -32,10 +32,16 @@ func updateDeviceAttr(deviceName string, attrName string, value string) {
 
 	if ok && vitotrol.AttributesRef[attrId].Access == vitotrol.ReadWrite {
 		fmt.Printf("Setting %s to %s\n", attrName, value)
+		// the server wants doubles like "21,5"
+		vitodataValue, err := vitotrol.AttributesRef[attrId].Type.Human2VitodataValue(value)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "WriteData %s: bad value: %s\n", attrName, err)
+			return
+		}
 		ok = false
 		for _, vdev := range pVitotrol.Devices {
 			if vdev.DeviceName == deviceName {
-				ch, err := vdev.WriteDataWait(pVitotrol, attrId, value)
+				ch, err := vdev.WriteDataWait(pVitotrol, attrId, vitodataValue)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "WriteData error: %s\n", err)
 					return
@@ -218,8 +224,6 @@ func refreshDevice(device *vitotrol.Device, attrs []vitotrol.AttrID) bool {
 	}
 
 	// Write the batch
-	values, _ := json.Marshal(fields)
-	fmt.Sprintln("%", values)
 	for key, element := range fields {
 		token := mqttClient.Publish(pConf.MQTT.Topic+"/"+device.DeviceName+"/"+key, 0, false, fmt.Sprint(element))
 		token.Wait()
@@ -260,46 +264,38 @@ func resolveFields() {
 		attrs := make(map[vitotrol.AttrID]struct{}, len(configDevice.Fields))
 
 		for _, fieldName := range configDevice.Fields {
-			// Computed attribute
-			if computedAttr, ok := computedAttrs[fieldName]; ok {
-				for _, attrID := range computedAttr.Attrs {
-					attrs[attrID] = struct{}{}
-				}
-				configDevice.computedFields = append(configDevice.computedFields, fieldName)
-			} else {
-				// Already known attribute
-				attrID, ok := vitotrol.AttributesNames2IDs[fieldName]
-				if !ok {
-					// Custom attribute
+			// Already known attribute
+			attrID, ok := vitotrol.AttributesNames2IDs[fieldName]
+			if !ok {
+				// Custom attribute
 
-					m := customAttrRegEx.FindStringSubmatch(fieldName)
-					if m == nil {
-						fmt.Fprintf(os.Stderr, "Unknown attribute `%s'\n", fieldName)
-						os.Exit(1)
-					}
-
-					tmpName := m[1]
-					access := vitotrol.ReadOnly
-
-					// TODO Better would be to do configDevice.GetTypeInfo and cache the result
-					// and check access against the real type mapping.
-					if strings.HasPrefix(tmpName, "RW") {
-						access = vitotrol.ReadWrite
-					}
-
-					attrRef := vitotrol.AttrRef{
-						Type:   vitotrol.TypeDouble,
-						Access: access,
-						Name:   tmpName,
-					}
-					tmpID, _ := strconv.ParseUint(m[2], 16, 16)
-					attrID = vitotrol.AttrID(tmpID)
-
-					vitotrol.AddAttributeRef(attrID, attrRef)
+				m := customAttrRegEx.FindStringSubmatch(fieldName)
+				if m == nil {
+					fmt.Fprintf(os.Stderr, "Unknown attribute `%s'\n", fieldName)
+					os.Exit(1)
 				}
 
-				attrs[attrID] = struct{}{}
+				tmpName := m[1]
+				access := vitotrol.ReadOnly
+
+				// TODO Better would be to do configDevice.GetTypeInfo and cache the result
+				// and check access against the real type mapping.
+				if strings.HasPrefix(tmpName, "RW") {
+					access = vitotrol.ReadWrite
+				}
+
+				attrRef := vitotrol.AttrRef{
+					Type:   vitotrol.TypeDouble,
+					Access: access,
+					Name:   tmpName,
+				}
+				tmpID, _ := strconv.ParseUint(m[2], 16, 16)
+				attrID = vitotrol.AttrID(tmpID)
+
+				vitotrol.AddAttributeRef(attrID, attrRef)
 			}
+
+			attrs[attrID] = struct{}{}
 		}
 
 		if len(attrs) == 0 {

@@ -35,7 +35,6 @@ type ConfigDevice struct {
 	Tags             map[string]string `yaml:"tags"`
 	Fields           []string          `yaml:"fields"`
 	attrs            []vitotrol.AttrID
-	computedFields   []string
 }
 
 type Config struct {

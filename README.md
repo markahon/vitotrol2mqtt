@@ -63,13 +63,6 @@ e.g. a WO1C circulation pump schedule `konf_schaltzeiten_zp_rw` 0x1d77 = 7543:
   The current schedule is read first (its type is echoed on write), the write
   waits for the controller (~1 min) and the read-back is published.
 
-### Computed attributes
-
-Note that you can provide the special attribute
-`ComputedSetpointTemp`. This fake attribute is computed using several
-others and corresponds to the setpoint temperature (as it appears that
-this value is not available in Vitotrol™ served attributes).
-
 ## Run locally
 
 Once your `vitotrol2mqtt.yml` is ready, you can launch:
