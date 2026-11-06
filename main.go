@@ -145,7 +145,9 @@ func VitotrolInit(vconf *ConfigVitotrol) *vitotrol.Session {
 	fmt.Println("Vitotrol login...")
 	err := pVitotrol.Login(vconf.Login, vconf.Password)
 	if err != nil {
-		_ = fmt.Errorf("login failed: %s", err)
+		fmt.Println("Login failed:", err)
+		// don't retry a rejected login every minute, it can lock the account
+		time.Sleep(time.Duration(vconf.RetryTimeout) * time.Second)
 		os.Exit(1)
 	}
 
