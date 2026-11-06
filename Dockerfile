@@ -7,7 +7,7 @@ RUN go mod download
 COPY *.go ./
 RUN CGO_ENABLED=0 GOOS=linux go build -o vitotrol2mqtt .
 
-FROM alpine:3.13.2
+FROM alpine:3.22
 
 COPY --from=builder /build/vitotrol2mqtt /vitotrol2mqtt
 
