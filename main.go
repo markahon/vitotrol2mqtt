@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -198,6 +199,24 @@ func getAttrValue(vdev *vitotrol.Device, attrID vitotrol.AttrID) (value interfac
 	return
 }
 
+// maxTimeouts consecutive refresh timeouts are ridden out before exiting.
+const maxTimeouts = 10
+
+var refreshTimeouts int
+
+// skipTimeout reports whether a refresh error is a timeout to ride out. The
+// gateway drops its cloud link for a few minutes several times a day (logs
+// 2026-11); exiting on each one flapped every HA entity to unavailable. More
+// than maxTimeouts in a row is a real outage: false, the caller exits
+// (crash-only: fresh login, HA sees offline).
+func skipTimeout(err error, fails *int) bool {
+	if !errors.Is(err, vitotrol.ErrTimeout) {
+		return false
+	}
+	*fails++
+	return *fails <= maxTimeouts
+}
+
 func refreshDevice(device *vitotrol.Device, attrs []vitotrol.AttrID) bool {
 	ch, err := device.RefreshDataWait(pVitotrol, attrs)
 	if err != nil {
@@ -206,8 +225,12 @@ func refreshDevice(device *vitotrol.Device, attrs []vitotrol.AttrID) bool {
 	}
 	if err = <-ch; err != nil {
 		fmt.Fprintf(os.Stderr, "RefreshData failed: %s\n", err)
+		if skipTimeout(err, &refreshTimeouts) {
+			return false // keep the session and the last values, retry next cycle
+		}
 		os.Exit(1)
 	}
+	refreshTimeouts = 0
 
 	err = device.GetData(pVitotrol, attrs)
 	if err != nil {
