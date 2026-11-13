@@ -1,8 +1,8 @@
 package main
 
 import (
-	"errors"
 	"testing"
+	"time"
 
 	"github.com/benvanmierloo/go-vitotrol"
 )
@@ -27,17 +27,21 @@ func TestGetAttrValue(t *testing.T) {
 	}
 }
 
-func TestSkipTimeout(t *testing.T) {
-	fails := 0
-	if skipTimeout(errors.New("Keine aktive/gültige Session"), &fails) || fails != 0 {
-		t.Error("non-timeout error must not be skipped")
-	}
-	for i := 1; i <= maxTimeouts; i++ {
-		if !skipTimeout(vitotrol.ErrTimeout, &fails) {
-			t.Errorf("timeout %d should be skipped", i)
+func TestTimeoutAction(t *testing.T) {
+	for _, c := range []struct {
+		elapsed time.Duration
+		sent    bool
+		want    string
+	}{
+		{0, false, "skip"},
+		{wakeupAfter - time.Second, false, "skip"},
+		{wakeupAfter, false, "wakeup"},
+		{wakeupAfter + time.Minute, true, "skip"}, // nudged once only
+		{giveUpAfter, true, "exit"},
+		{giveUpAfter, false, "exit"},
+	} {
+		if got := timeoutAction(c.elapsed, c.sent); got != c.want {
+			t.Errorf("timeoutAction(%s, %v) = %q, want %q", c.elapsed, c.sent, got, c.want)
 		}
-	}
-	if skipTimeout(vitotrol.ErrTimeout, &fails) {
-		t.Error("timeout past maxTimeouts must exit")
 	}
 }

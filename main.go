@@ -26,45 +26,42 @@ var customAttrRegEx = regexp.MustCompile(
 // updateDeviceAttr writes one attribute. Errors are logged, not fatal: a failed
 // write must not stop polling.
 func updateDeviceAttr(deviceName string, attrName string, value string) {
+	if err := writeAttr(deviceName, attrName, value); err != nil {
+		fmt.Fprintf(os.Stderr, "WriteData %s: %s\n", attrName, err)
+		fmt.Printf("Device %s: cannot set attribute %s to %s\n", deviceName, attrName, value)
+	}
+}
+
+// writeAttr writes one read-write attribute and publishes the new value.
+func writeAttr(deviceName string, attrName string, value string) error {
 	writeMutex.Lock()
 	defer writeMutex.Unlock()
 
 	attrId, ok := vitotrol.AttributesNames2IDs[attrName]
-
-	if ok && vitotrol.AttributesRef[attrId].Access == vitotrol.ReadWrite {
-		fmt.Printf("Setting %s to %s\n", attrName, value)
-		// the server wants doubles like "21,5"
-		vitodataValue, err := vitotrol.AttributesRef[attrId].Type.Human2VitodataValue(value)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "WriteData %s: bad value: %s\n", attrName, err)
-			return
-		}
-		ok = false
-		for _, vdev := range pVitotrol.Devices {
-			if vdev.DeviceName == deviceName {
-				ch, err := vdev.WriteDataWait(pVitotrol, attrId, vitodataValue)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "WriteData error: %s\n", err)
-					return
-				}
-				if err = <-ch; err != nil {
-					fmt.Fprintf(os.Stderr, "WriteData failed: %s\n", err)
-					return
-				}
-				// update MQTT with the new value
-				token := mqttClient.Publish(pConf.MQTT.Topic+"/"+vdev.DeviceName+"/"+attrName, 0, false, value)
-				token.Wait()
-				ok = true
-				break
+	if !ok || vitotrol.AttributesRef[attrId].Access != vitotrol.ReadWrite {
+		return errors.New("not a read-write attribute")
+	}
+	fmt.Printf("Setting %s to %s\n", attrName, value)
+	// the server wants doubles like "21,5"
+	vitodataValue, err := vitotrol.AttributesRef[attrId].Type.Human2VitodataValue(value)
+	if err != nil {
+		return fmt.Errorf("bad value: %w", err)
+	}
+	for _, vdev := range pVitotrol.Devices {
+		if vdev.DeviceName == deviceName {
+			ch, err := vdev.WriteDataWait(pVitotrol, attrId, vitodataValue)
+			if err != nil {
+				return err
 			}
+			if err = <-ch; err != nil {
+				return err
+			}
+			// update MQTT with the new value
+			mqttClient.Publish(pConf.MQTT.Topic+"/"+vdev.DeviceName+"/"+attrName, 0, false, value).Wait()
+			return nil
 		}
-	} else {
-		ok = false
 	}
-
-	if !ok {
-		fmt.Printf("Device %s: cannot set attribute %s to %s\n", deviceName, attrName, value)
-	}
+	return errors.New("unknown device")
 }
 
 // writeMutex serialises writes to the controller.
@@ -199,22 +196,102 @@ func getAttrValue(vdev *vitotrol.Device, attrID vitotrol.AttrID) (value interfac
 	return
 }
 
-// maxTimeouts consecutive refresh timeouts are ridden out before exiting.
-const maxTimeouts = 10
+// A refresh timeout means the gateway lost its cloud link. Short losses (a few
+// minutes, several a day, logs 2026-11) are ridden out in-process: exiting on
+// each one flapped every HA entity. Long ones used to need a manual nudge (change
+// any value on the Viessmann portal), so after wakeupAfter the bridge rewrites
+// wakeupAttr with its last read value. After giveUpAfter it exits (crash-only:
+// fresh login, which reports a disconnected device).
+const (
+	wakeupAfter = 15 * time.Minute
+	giveUpAfter = 45 * time.Minute
+	wakeupAttr  = "RWNormalRoomTemp"
+)
 
-var refreshTimeouts int
+var (
+	failingSince time.Time // zero = last refresh worked
+	timeouts     int
+	wakeupSent   bool
+	wakeupValue  string // last read value of wakeupAttr
+	lastState    string
+)
 
-// skipTimeout reports whether a refresh error is a timeout to ride out. The
-// gateway drops its cloud link for a few minutes several times a day (logs
-// 2026-11); exiting on each one flapped every HA entity to unavailable. More
-// than maxTimeouts in a row is a real outage: false, the caller exits
-// (crash-only: fresh login, HA sees offline).
-func skipTimeout(err error, fails *int) bool {
-	if !errors.Is(err, vitotrol.ErrTimeout) {
-		return false
+// timeoutAction decides what to do after a refresh timeout that started
+// elapsed ago: "skip" (retry next cycle), "wakeup" (nudge once, then retry) or
+// "exit".
+func timeoutAction(elapsed time.Duration, wakeupSent bool) string {
+	switch {
+	case elapsed >= giveUpAfter:
+		return "exit"
+	case elapsed >= wakeupAfter && !wakeupSent:
+		return "wakeup"
 	}
-	*fails++
-	return *fails <= maxTimeouts
+	return "skip"
+}
+
+// publishStatus publishes the bridge state retained on <topic>/bridge/status:
+// ok | timeouts | wakeup_sent | wakeup_failed. HA logs it and warns on wakeup_failed.
+func publishStatus(state, detail string) {
+	lastState = state
+	since := ""
+	if !failingSince.IsZero() {
+		since = failingSince.Format(time.RFC3339)
+	}
+	b, _ := json.Marshal(map[string]interface{}{
+		"state": state, "timeouts": timeouts, "since": since, "detail": detail,
+		"wakeup_sent": wakeupSent, "time": time.Now().Format(time.RFC3339),
+	})
+	fmt.Printf("Status: %s\n", b)
+	mqttClient.Publish(pConf.MQTT.Topic+"/bridge/status", 0, true, b).Wait()
+}
+
+// onRefreshTimeout handles one refresh timeout; it returns only if the bridge
+// should keep running.
+func onRefreshTimeout(deviceName string) {
+	if failingSince.IsZero() {
+		failingSince = time.Now()
+	}
+	timeouts++
+	switch timeoutAction(time.Since(failingSince), wakeupSent) {
+	case "exit":
+		state := "timeouts"
+		if wakeupSent {
+			state = "wakeup_failed"
+		}
+		publishStatus(state, "giving up, restarting")
+		os.Exit(1)
+	case "wakeup":
+		wakeupSent = true
+		result := "no value read yet, nothing written"
+		if wakeupValue != "" {
+			if err := writeAttr(deviceName, wakeupAttr, wakeupValue); err != nil {
+				result = fmt.Sprintf("rewrote %s=%s: %s", wakeupAttr, wakeupValue, err)
+			} else {
+				result = fmt.Sprintf("rewrote %s=%s: accepted", wakeupAttr, wakeupValue)
+			}
+		}
+		publishStatus("wakeup_sent", result)
+	default:
+		if lastState != "wakeup_sent" {
+			publishStatus("timeouts", "")
+		}
+	}
+}
+
+// onRefreshOK publishes the recovery (or the first poll after start).
+func onRefreshOK() {
+	if lastState == "ok" {
+		return
+	}
+	detail := "started"
+	if !failingSince.IsZero() {
+		detail = fmt.Sprintf("recovered after %d timeouts, %s", timeouts, time.Since(failingSince).Round(time.Second))
+		if wakeupSent {
+			detail += ", after wake-up write"
+		}
+	}
+	failingSince, timeouts, wakeupSent = time.Time{}, 0, false
+	publishStatus("ok", detail)
 }
 
 func refreshDevice(device *vitotrol.Device, attrs []vitotrol.AttrID) bool {
@@ -225,12 +302,12 @@ func refreshDevice(device *vitotrol.Device, attrs []vitotrol.AttrID) bool {
 	}
 	if err = <-ch; err != nil {
 		fmt.Fprintf(os.Stderr, "RefreshData failed: %s\n", err)
-		if skipTimeout(err, &refreshTimeouts) {
-			return false // keep the session and the last values, retry next cycle
+		if !errors.Is(err, vitotrol.ErrTimeout) {
+			os.Exit(1)
 		}
-		os.Exit(1)
+		onRefreshTimeout(device.DeviceName)
+		return false // keep the session and the last values, retry next cycle
 	}
-	refreshTimeouts = 0
 
 	err = device.GetData(pVitotrol, attrs)
 	if err != nil {
@@ -245,6 +322,11 @@ func refreshDevice(device *vitotrol.Device, attrs []vitotrol.AttrID) bool {
 			fields[vitotrol.AttributesRef[attrID].Name] = value
 		}
 	}
+
+	if v, ok := fields[wakeupAttr]; ok {
+		wakeupValue = fmt.Sprint(v)
+	}
+	onRefreshOK()
 
 	// Write the batch
 	for key, element := range fields {
